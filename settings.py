@@ -22,6 +22,6 @@ Date: {}
 Server: SelfMadeServer v0.0.1
 Content-Type: {}
 Content-Length: {}
-Connection: close
+Connection: keep-alive
 
 """
