@@ -1,99 +1,86 @@
-import re
 import socket
-import json
-from os.path import exists, sep
-from threading import Thread
 from datetime import datetime
+from os.path import join as join_path, isfile
+from threading import Thread
 
-LOGS = "logs.txt"
-SETTINGS = "settings.json"
-with open(SETTINGS, "r") as settings_file:
-    settings = json.load(settings_file)
-
-
-def write_log(addr, text, is_error):
-    with open(LOGS, "a") as log_file:
-        log_file.write(f"""Date: {datetime.now().timestamp()}
-IP-address: {addr}
-{'Error' if is_error else 'File path'}: {text}
-
-""")
+from settings import *
 
 
-def generate_path(request, addr):
-    global settings
-    try:
-        filename = request.split("\n")[0].split(" ")[1]
-    except:
-        filename = "index.html"
-    if filename == "/":
-        filename = "index.html"
-    if not exists(settings["directory"] + sep + filename) or filename == "":
-        write_log(addr, "404", True)
-        return "404"
-    elif not re.match(r"\S*\.((html)|(css)|(js))", filename):
-        write_log(addr, "403", True)
-        return "403"
+def add_log(date, addr, path):
+    with open(LOGS, "a") as logs:
+        logs.write(f"<{date}> {addr}: {path}\n")
+
+
+def generate_path(request):
+    path = request.split("\n")[0].split(" ")[1][1:]
+    if not path:
+        path = DEFAULT_PATH
+    return join_path(DIRECTORY, path)
+
+
+def get_extension(path):
+    return path.split(".")[-1]
+
+
+def get_code(path, extension):
+    if not isfile(path):
+        return 404
+    elif extension not in ALLOWED_TYPES:
+        return 403
     else:
-        write_log(addr, settings["directory"] + sep + filename, False)
-        return settings["directory"] + sep + filename
+        return 200
 
 
-def generate_text(request, addr):
-    path = generate_path(request, addr)
-    if path == "403" or path == "404":
-        return path
+def read_file(path):
+    return open(path, "rb").read()
+
+
+def get_date():
+    return datetime.now().strftime('%a, %d %b %Y %H:%M:%S GTM')
+
+
+def process(request, addr):
+    path = generate_path(request)
+    extension = get_extension(path)
+    code = get_code(path, extension)
+    date = get_date()
+    body = b""
+    if code == 200:
+        body = read_file(path)
     else:
-        with open(path, "r") as text:
-            return "\n".join([str(lines) for lines in text.readlines()])
+        extension = "html"
+    response = RESPONSE_PATTERN.format(code, CODES[code], date, TYPES[extension], len(body)).encode() + body
+    add_log(date, addr, path)
+    return response
 
 
-def generate_response(request, addr):
-    text = generate_text(request, addr)
-    if text == "403" or text == "404":
-        return f"""HTTP/1.1 {text} {"Not found" if text == "404" else "Forbidden"}
-Server: SelfMadeServer v0.0.1
-Date: {datetime.now().timestamp()}
-Content-Type: text/html
-Content-Length: {len(text)}
-Connection: close
-
-""".encode()
-    else:
-        return f"""HTTP/1.1 200 OK
-Server: SelfMadeServer v0.0.1
-Date: {datetime.now().timestamp()}
-Content-Type: text/html
-Content-Length: {len(text)}
-Connection: close
-
-{text}""".encode()
-
-
-def handle(conn, addr):
-    global settings
+def handle(conn: socket.socket, addr):
     with conn:
-        request = conn.recv(settings["size"]).decode()
+        request = conn.recv(BUFFER_SIZE).decode()
         print(request)
-        response = generate_response(request, addr)
-        print(response)
-        conn.send(response)
+        if request:
+            print(request)
+            response = process(request, addr)
+            conn.send(response)
+
+
+def accept(sock):
+    while True:
+        conn, (addr, port) = sock.accept()
+        print(f"Connected {addr, port}")
+        Thread(target=handle, args=[conn, addr]).start()
 
 
 def main():
-    global settings
     sock = socket.socket()
     try:
-        sock.bind(('', settings["port"]))
-        print(settings["port"])
+        sock.bind((HOST, PORT))
+        print((HOST, PORT))
     except OSError:
-        sock.bind(('', settings["alternate_port"]))
-        print(settings["alternate_port"])
-    sock.listen(5)
-    while True:
-        conn, addr = sock.accept()
-        print("Connected", addr)
-        Thread(target=handle, args=[conn, addr[0]]).start()
+        sock.bind((HOST, RESERVE_PORT))
+        print((HOST, RESERVE_PORT))
+    sock.listen(10)
+    accept(sock)
 
 
 if __name__ == '__main__':
